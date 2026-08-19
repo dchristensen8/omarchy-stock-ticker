@@ -7,7 +7,7 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "christensen.stock-ticker"
+  moduleName: "dchristensen8.stock-ticker"
   manageIpc: false
 
   property var anchorItem: null
@@ -19,18 +19,49 @@ Panel {
 
   readonly property string currentTicker: setting("ticker", "AAPL")
   readonly property int refreshInterval: Math.max(3, parseInt(setting("refreshSec", "5"), 10) || 5)
+  // ET is UTC-5 fixed (no DST) — an accepted simplification mirrored in
+  // Model.js isMarketOpen(); off by an hour around DST transitions.
   readonly property int etOffsetMinutes: -300
 
   // True when no successful quote fetch happened within 3 refresh cycles.
   readonly property bool stale: lastUpdated > 0 && (root._now - root.lastUpdated) > root.refreshInterval * 1000 * 3
 
   readonly property string barChangeLabel: {
-    if (!quote || quote.price === null || !quote.previousClose) return ""
+    if (!quote || quote.price === null ||
+        quote.previousClose === null || quote.previousClose === undefined) return ""
     var ch = quote.price - quote.previousClose
     return Model.fmtPct((ch / quote.previousClose) * 100)
   }
 
+  // Low/high of whichever range the bar marker is showing (Day or 52W).
+  function rangeLow() {
+    if (!root.quote) return null
+    return root.rangeMode === "52W" ? root.quote.weekLow52 : root.quote.dayLow
+  }
+
+  function rangeHigh() {
+    if (!root.quote) return null
+    return root.rangeMode === "52W" ? root.quote.weekHigh52 : root.quote.dayHigh
+  }
+
+  // Extended-hours price (post-market takes priority over pre-market/overnight).
+  readonly property var extendedPrice: {
+    if (!quote) return null
+    if (quote.postMarketPrice !== null && quote.postMarketPrice !== undefined)
+      return quote.postMarketPrice
+    if (quote.preMarketPrice !== null && quote.preMarketPrice !== undefined)
+      return quote.preMarketPrice
+    return null
+  }
+
+  // vs the regular close (today's close after hours; the prior close pre-market).
+  readonly property real extendedChange: {
+    if (!quote || quote.price === null || extendedPrice === null) return 0
+    return extendedPrice - quote.price
+  }
+
   property string timeFrame: "1D"
+  property string rangeMode: "Day"
   property var quote: null
   property var chartData: []
   property bool editingTicker: false
@@ -119,17 +150,25 @@ Panel {
 
   function refresh() {
     if (!currentTicker || currentTicker.trim() === "") return
-    if (quoteProc.running) { quoteQueued = true; return }
-    if (chartProc.running) { chartQueued = true; return }
-    _quoteStdout = ""
-    _quoteStderr = ""
-    _chartStdout = ""
-    _chartStderr = ""
-    loading = quote === null
-    quoteProc.command = Model.quoteUrl(currentTicker)
-    quoteProc.running = true
-    chartProc.command = Model.chartUrl(currentTicker, timeFrame)
-    chartProc.running = true
+    // Start each fetch independently so a busy quote fetch never starves the
+    // (otherwise idle) chart process, and vice versa.
+    if (quoteProc.running) {
+      quoteQueued = true
+    } else {
+      _quoteStdout = ""
+      _quoteStderr = ""
+      loading = quote === null
+      quoteProc.command = Model.quoteUrl(currentTicker)
+      quoteProc.running = true
+    }
+    if (chartProc.running) {
+      chartQueued = true
+    } else {
+      _chartStdout = ""
+      _chartStderr = ""
+      chartProc.command = Model.chartUrl(currentTicker, timeFrame)
+      chartProc.running = true
+    }
   }
 
   function changeTimeframe(tf) {
@@ -166,9 +205,24 @@ Panel {
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
+  // Allowlist for ticker symbols: letters, digits, and Yahoo punctuation.
+  // Rejects anything that isn't a plausible symbol before it hits the network,
+  // the shared JSON file, or a UI label.
+  function isValidTicker(s) {
+    return /^[A-Z0-9.\-^=]{1,10}$/.test(String(s || "").toUpperCase())
+  }
+
   function commitEditTicker() {
     var newTicker = tickerField.text.trim().toUpperCase()
-    if (newTicker === "" || newTicker === currentTicker) {
+    if (newTicker === "") {
+      cancelEditTicker()
+      return
+    }
+    if (!root.isValidTicker(newTicker)) {
+      root.tickerInvalid = true
+      return
+    }
+    if (newTicker === currentTicker) {
       cancelEditTicker()
       return
     }
@@ -204,7 +258,8 @@ Panel {
   // ── Watchlist persistence ────────────────────────────────────────────────
 
   function cacheFromQuote(q) {
-    return { price: q.price, previousClose: q.previousClose, currency: q.currency }
+    return { price: q.price, previousClose: q.previousClose,
+             currency: q.currency, companyName: q.companyName }
   }
 
   function loadWatchlistFile() {
@@ -213,9 +268,9 @@ Panel {
     try { parsed = JSON.parse(txt) } catch (e) { parsed = null }
     var syms = (parsed && parsed.symbols && Array.isArray(parsed.symbols)) ? parsed.symbols : []
     var clean = []
-    for (var i = 0; i < syms.length; i++) {
+    for (var i = 0; i < syms.length && clean.length < 50; i++) {
       var s = String(syms[i]).trim().toUpperCase()
-      if (s && clean.indexOf(s) < 0) clean.push(s)
+      if (s && root.isValidTicker(s) && clean.indexOf(s) < 0) clean.push(s)
     }
     root.watchlist = clean
     root.watchlistQuotes = (parsed && parsed.quotes && typeof parsed.quotes === "object")
@@ -269,12 +324,32 @@ Panel {
     if (next < 0) next = 0
     if (next >= root.watchlist.length) next = root.watchlist.length - 1
     watchlistView.currentIndex = next
+    ensureWatchVisible()
+  }
+
+  // Scroll the pane so the keyboard-selected row stays visible when the list
+  // is taller than the popup (the ListView itself never scrolls internally).
+  function ensureWatchVisible() {
+    var item = watchlistView.currentItem
+    if (!item || !watchListScroll) return
+    var pos = item.mapToItem(watchListScroll.contentItem, 0, 0)
+    var top = watchListScroll.contentY
+    var bottom = top + watchListScroll.height
+    var itemTop = pos.y
+    var itemBottom = pos.y + item.height
+    if (itemTop < top) watchListScroll.contentY = itemTop
+    else if (itemBottom > bottom) watchListScroll.contentY = itemBottom - watchListScroll.height
   }
 
   // ── Watchlist mutation ───────────────────────────────────────────────────
 
   function addToList(symbol, q) {
     var arr = root.watchlist.slice()
+    if (arr.length >= 50) {
+      root.addError = "Watchlist full (max 50)"
+      Qt.callLater(function() { if (addField) addField.forceActiveFocus() })
+      return
+    }
     arr.push(symbol)
     root.watchlist = arr
     var qs = {}
@@ -319,6 +394,11 @@ Panel {
   function commitAddTicker() {
     var sym = addField.text.trim().toUpperCase()
     if (!sym) return
+    if (!root.isValidTicker(sym)) {
+      root.addError = "Invalid symbol"
+      Qt.callLater(function() { if (addField) addField.forceActiveFocus() })
+      return
+    }
     if (root.watchlist.indexOf(sym) >= 0) {
       root.addError = "Already on watchlist"
       Qt.callLater(function() { if (addField) addField.forceActiveFocus() })
@@ -347,6 +427,7 @@ Panel {
     } else {
       paintTimer.stop()
       stopWatchQueue()
+      root.rangeMode = "Day"
     }
   }
 
@@ -467,6 +548,16 @@ Panel {
         if (root.watchCursor === root.watchlist.length - 1) root.saveWatchlist()
         root.watchCursor++
         if (root.watchCursor < root.watchlist.length) fetchNextWatch()
+        return
+      }
+
+      // Neither branch matched: the exiting fetch was a cancelled add (its
+      // symbol is no longer pending and isn't the current queue item), or a
+      // regular queue fetch whose symbol no longer matches the cursor. Resume
+      // the queue so it doesn't stall until the 45s timer fires a fresh pass.
+      if (root.watchlistMode && root.pendingAdd === "" &&
+          fetchSym !== root.watchlist[root.watchCursor]) {
+        Qt.callLater(root.fetchNextWatch)
       }
     }
 
@@ -513,12 +604,22 @@ Panel {
     }
   }
 
+  // Ensure the watchlist directory exists before the first write, otherwise a
+  // silent write failure would drop the list on a fresh install.
+  Process {
+    id: ensureWatchlistDir
+    running: true
+    command: ["mkdir", "-p", Quickshell.env("HOME") + "/.local/share/stock-ticker"]
+  }
+
   Timer {
     id: refreshTimer
-    // Refresh faster while the market is open and back off exponentially on
-    // consecutive failures (capped at 8x the base interval).
-    interval: root.refreshInterval * 1000 *
-              (Model.isMarketOpen(root._now, root.etOffsetMinutes) ? 1 : 12) *
+    // Refresh at the base interval while the market is open; once per minute
+    // otherwise (extended-hours price still tracks). Backs off exponentially
+    // on consecutive failures (capped at 8x).
+    interval: (Model.isMarketOpen(root._now, root.etOffsetMinutes)
+               ? root.refreshInterval * 1000
+               : 60000) *
               Math.min(8, Math.pow(2, root.failCount))
     running: true
     repeat: true
@@ -542,7 +643,7 @@ Panel {
   }
 
   IpcHandler {
-    target: "christensen.stock-ticker"
+    target: "dchristensen8.stock-ticker"
     function open(): void { root.open() }
     function close(): void { root.close() }
     function show(): void { root.open() }
@@ -558,7 +659,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(480))
-    contentHeight: panel.fittedContentHeight(Math.max(contentCol.implicitHeight, watchCol.implicitHeight))
+    contentHeight: panel.fittedContentHeight(contentCol.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -614,6 +715,7 @@ Panel {
                 visible: root.quote && root.quote.companyName
                 width: parent.width
                 elide: Text.ElideRight
+                textFormat: Text.PlainText
                 text: root.quote ? root.quote.companyName : ""
                 color: root.dim
                 font.family: root.fontFamily
@@ -636,6 +738,7 @@ Panel {
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.display
                     font.bold: true
+                    textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
                   }
 
@@ -663,6 +766,7 @@ Panel {
                 TextField {
                   id: tickerField
                   width: Style.space(120)
+                  maximumLength: 10
                   foreground: root.fg
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.display
@@ -721,17 +825,17 @@ Panel {
                 font.bold: true
               }
 
-              // Day range bar with marker at current price
+              // Range bar with marker at current price (Day or 52W per rangeMode)
               Rectangle {
-                visible: root.quote !== null && root.quote.dayLow !== null &&
-                         root.quote.dayHigh !== null && root.quote.dayHigh > root.quote.dayLow
+                visible: root.quote !== null && root.rangeLow() !== null &&
+                         root.rangeHigh() !== null && root.rangeHigh() > root.rangeLow()
                 width: parent.width
                 height: 3
                 radius: 1.5
                 color: Qt.rgba(1, 1, 1, 0.16)
 
                 Rectangle {
-                  id: dayMarker
+                  id: rangeMarker
                   width: 3
                   height: 9
                   radius: 1.5
@@ -739,10 +843,10 @@ Panel {
                   y: (parent.height - height) / 2
                   x: {
                     if (!root.quote || root.quote.price === null ||
-                        root.quote.dayLow === null || root.quote.dayHigh === null ||
-                        root.quote.dayHigh <= root.quote.dayLow) return 0
-                    var f = (root.quote.price - root.quote.dayLow) /
-                           (root.quote.dayHigh - root.quote.dayLow)
+                        root.rangeLow() === null || root.rangeHigh() === null ||
+                        root.rangeHigh() <= root.rangeLow()) return 0
+                    var f = (root.quote.price - root.rangeLow()) /
+                           (root.rangeHigh() - root.rangeLow())
                     if (f < 0) f = 0
                     if (f > 1) f = 1
                     return f * parent.width - width / 2
@@ -758,9 +862,17 @@ Panel {
 
                 Text {
                   text: "Day"
-                  color: root.dim
+                  color: root.rangeMode === "Day" ? root.fg : root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
+                  font.bold: root.rangeMode === "Day"
+
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.rangeMode = "Day"
+                  }
                 }
                 Text {
                   text: root.quote ? Model.fmtPriceWithCurrency(root.quote.dayLow, root.quote.currency) : ""
@@ -790,9 +902,17 @@ Panel {
 
                 Text {
                   text: "52W"
-                  color: root.dim
+                  color: root.rangeMode === "52W" ? root.fg : root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
+                  font.bold: root.rangeMode === "52W"
+
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.rangeMode = "52W"
+                  }
                 }
                 Text {
                   text: root.quote ? Model.fmtPriceWithCurrency(root.quote.weekLow52, root.quote.currency) : ""
@@ -880,11 +1000,19 @@ Panel {
               }
 
               Text {
-                visible: root.quote !== null
-                text: root.quote ? (root.quote.currency || "USD") : ""
-                color: root.dim
+                visible: root.quote !== null && root.extendedPrice !== null
+                text: {
+                  if (!root.quote || root.extendedPrice === null) return ""
+                  var isPost = root.quote.postMarketPrice !== null &&
+                               root.quote.postMarketPrice !== undefined
+                  return (isPost ? "post" : "pre") + " " + Model.fmtPrice(root.extendedPrice)
+                }
+                color: root.quote
+                  ? Model.changeColor(root.extendedChange, root.dim)
+                  : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
+                font.bold: true
                 horizontalAlignment: Text.AlignRight
               }
             }
@@ -916,7 +1044,6 @@ Panel {
           Item {
             width: parent.width
             height: 180
-            visible: root.chartData.length > 0
 
             Canvas {
               id: chartCanvas
@@ -998,6 +1125,16 @@ Panel {
                 ctx.fillText(Model.fmtPrice(minP), padL - 6, padT + ch)
                 ctx.fillStyle = root.dim
 
+                // Period % change (upper right)
+                var firstP = dataPoints[0].p
+                var lastP = dataPoints[dataPoints.length - 1].p
+                var pctChg = firstP ? ((lastP - firstP) / firstP) * 100 : 0
+                ctx.font = "bold 12px " + root.fontFamily
+                ctx.fillStyle = up ? "#22c55e" : "#ef4444"
+                ctx.fillText((pctChg >= 0 ? "+" : "") + pctChg.toFixed(2) + "%",
+                             padL + cw, padT + 14)
+                ctx.font = "10px " + root.fontFamily
+
                 // Y-axis ticks
                 ctx.textAlign = "right"
                 for (var n = 1; n <= 3; n++) {
@@ -1016,10 +1153,19 @@ Panel {
                 ctx.textAlign = "center"
                 var labelCount = Math.min(6, dataPoints.length)
                 var step = Math.max(1, Math.floor((dataPoints.length - 1) / (labelCount - 1)))
+                var lastLabelIdx = dataPoints.length - 1
+                var lastDrawn = false
                 for (var q = 0; q < dataPoints.length; q += step) {
                   if (q >= dataPoints.length) break
                   var label = Model.timeLabel(dataPoints[q].t, tf, Qt.formatDateTime)
                   ctx.fillText(label, px[q], padT + ch + 16)
+                  if (q === lastLabelIdx) lastDrawn = true
+                }
+                // Ensure the most recent point's label is always drawn even when
+                // the step lands just short of the final index.
+                if (!lastDrawn) {
+                  ctx.fillText(Model.timeLabel(dataPoints[lastLabelIdx].t, tf, Qt.formatDateTime),
+                               px[lastLabelIdx], padT + ch + 16)
                 }
 
                 // Cache hit-test coordinates for the hover overlay
@@ -1153,23 +1299,18 @@ Panel {
       }
 
       // ── Watchlist pane ──
-      Flickable {
-        id: watchScroll
+      // Pegged to the popup height (same size as the main quote pane); only
+      // the symbol list scrolls, above the pinned add-symbol section.
+      Column {
+        id: watchCol
         anchors.fill: parent
         visible: root.watchlistMode
-        contentWidth: width
-        contentHeight: watchCol.implicitHeight
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
-        interactive: contentHeight > height
-
-        Column {
-          id: watchCol
-          width: watchScroll.width
-          spacing: Style.space(10)
+        width: parent.width
+        spacing: Style.space(10)
 
           // Header
           Row {
+            id: watchHeader
             width: parent.width
             spacing: Style.space(8)
 
@@ -1185,27 +1326,39 @@ Panel {
               text: root.watchlist.length + " symbols"
               color: root.dim
               font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Style.font.caption * 1.4
               anchors.verticalCenter: parent.verticalCenter
             }
           }
 
-          // Symbols with cached mini-quotes
-          ListView {
-            id: watchlistView
+          // Symbols with cached mini-quotes. Height tracks the list so every
+          // row renders; the Flickable scrolls when the list is taller than
+          // the pinned space above the add-symbol section.
+          Flickable {
+            id: watchListScroll
             width: parent.width
-            height: Math.min(root.watchlist.length, 6) * Style.space(34)
+            height: Math.max(0, parent.height - watchHeader.height -
+                               watchAddArea.height - watchFooter.height -
+                               3 * Style.space(10))
             clip: true
-            currentIndex: 0
-            interactive: true
             boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            contentWidth: width
+            contentHeight: watchlistView.height
+
+            ListView {
+              id: watchlistView
+              width: parent.width
+              height: root.watchlist.length * Style.space(44)
+            interactive: false
+            currentIndex: 0
             model: root.watchlist
 
             delegate: Item {
               required property string modelData
               required property int index
               width: watchlistView.width
-              height: Style.space(34)
+              height: Style.space(44)
 
               Rectangle {
                 anchors.fill: parent
@@ -1215,35 +1368,73 @@ Panel {
                   : "transparent"
               }
 
+              // Ticker — left aligned
               Text {
                 id: symText
                 text: modelData
                 color: root.fg
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                font.pixelSize: Style.font.body * 1.4
                 font.bold: true
+                textFormat: Text.PlainText
                 anchors.left: parent.left
-                anchors.leftMargin: Style.space(8)
+                anchors.leftMargin: Style.space(10)
                 anchors.verticalCenter: parent.verticalCenter
               }
 
+              // Company name — fills the space between ticker and price
               Text {
                 text: {
                   var c = root.watchlistQuotes[modelData]
-                  if (!c) return ""
-                  var ch = c.price - c.previousClose
-                  var pct = c.previousClose ? (ch / c.previousClose) * 100 : 0
-                  return Model.fmtPrice(c.price) + " (" + Model.fmtPct(pct) + ")"
+                  return c && c.companyName ? c.companyName : ""
                 }
-                color: {
-                  var c = root.watchlistQuotes[modelData]
-                  return c ? Model.changeColor(c.price - c.previousClose, root.dim) : root.dim
-                }
+                color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
+                font.pixelSize: Style.font.caption * 1.4
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
                 anchors.left: symText.right
-                anchors.leftMargin: Style.space(10)
+                anchors.leftMargin: Style.space(8)
+                anchors.right: priceRow.left
+                anchors.rightMargin: Style.space(6)
                 anchors.verticalCenter: parent.verticalCenter
+              }
+
+              // Price / change — right aligned
+              Row {
+                id: priceRow
+                anchors.right: removeText.left
+                anchors.rightMargin: Style.space(10)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(8)
+
+                Text {
+                  text: {
+                    var c = root.watchlistQuotes[modelData]
+                    return c ? Model.fmtPrice(c.price) : ""
+                  }
+                  color: root.fg
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall * 1.4
+                  font.bold: true
+                }
+
+                Text {
+                  text: {
+                    var c = root.watchlistQuotes[modelData]
+                    if (!c) return ""
+                    var ch = c.price - c.previousClose
+                    var pct = c.previousClose ? (ch / c.previousClose) * 100 : 0
+                    return Model.fmtPct(pct)
+                  }
+                  color: {
+                    var c = root.watchlistQuotes[modelData]
+                    return c ? Model.changeColor(c.price - c.previousClose, root.dim) : root.dim
+                  }
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall * 1.4
+                  font.bold: true
+                }
               }
 
               // Full-row hover highlight + click to select (sits below the ×)
@@ -1255,16 +1446,23 @@ Panel {
                 onClicked: root.selectTicker(modelData)
               }
 
+              // Remove × — nearly invisible until hovered
               Text {
+                id: removeText
                 text: "\uf00d"
-                color: "#ef4444"
+                color: removeHover.containsMouse
+                  ? "#ef4444"
+                  : Qt.rgba(root.dim.r, root.dim.g, root.dim.b, 0.3)
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
+                font.pixelSize: Style.font.bodySmall * 1.4
                 anchors.right: parent.right
-                anchors.rightMargin: Style.space(8)
+                anchors.rightMargin: Style.space(10)
                 anchors.verticalCenter: parent.verticalCenter
 
+                Behavior on color { ColorAnimation { duration: 120 } }
+
                 MouseArea {
+                  id: removeHover
                   anchors.fill: parent
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
@@ -1272,18 +1470,24 @@ Panel {
                 }
               }
             }
+            }
           }
 
-          // Add-symbol affordance (idle state)
-          Row {
-            visible: !root.addingTicker
-            spacing: Style.space(6)
+          Column {
+            id: watchAddArea
+            width: parent.width
+            spacing: Style.space(10)
+
+            // Add-symbol affordance (idle state)
+            Row {
+              visible: !root.addingTicker
+              spacing: Style.space(6)
 
             Text {
               text: "\uf067"
               color: root.dim
               font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              font.pixelSize: Style.font.bodySmall * 1.4
               anchors.verticalCenter: parent.verticalCenter
 
               MouseArea {
@@ -1298,7 +1502,7 @@ Panel {
               text: "add symbol"
               color: root.dim
               font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              font.pixelSize: Style.font.bodySmall * 1.4
               anchors.verticalCenter: parent.verticalCenter
 
               MouseArea {
@@ -1318,9 +1522,10 @@ Panel {
             TextField {
               id: addField
               width: Style.space(120)
+              maximumLength: 10
               foreground: root.fg
               font.family: root.fontFamily
-              font.pixelSize: Style.font.body
+              font.pixelSize: Style.font.body * 1.4
               placeholderText: "SYMBOL"
 
               Keys.onPressed: function(event) {
@@ -1338,7 +1543,7 @@ Panel {
               text: "\uf00c"
               color: "#22c55e"
               font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              font.pixelSize: Style.font.bodySmall * 1.4
               anchors.verticalCenter: parent.verticalCenter
 
               MouseArea {
@@ -1353,7 +1558,7 @@ Panel {
               text: "\uf00d"
               color: "#ef4444"
               font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              font.pixelSize: Style.font.bodySmall * 1.4
               anchors.verticalCenter: parent.verticalCenter
 
               MouseArea {
@@ -1366,27 +1571,33 @@ Panel {
           }
 
           Text {
-            visible: root.addError !== ""
-            text: root.addError
-            color: "#ef4444"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.italic: true
-          }
+                visible: root.addError !== ""
+                text: root.addError
+                color: "#ef4444"
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall * 1.4
+                font.italic: true
+              }
+            }
 
-          // Footer
-          PanelSeparator { width: parent.width; foreground: root.fg }
+            Column {
+              id: watchFooter
+              width: parent.width
+              spacing: Style.space(10)
 
-          Text {
-            width: parent.width
-            horizontalAlignment: Text.AlignHCenter
-            text: "click select \u00b7 x remove \u00b7 a add \u00b7 enter select \u00b7 r refresh"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+              // Footer
+              PanelSeparator { width: parent.width; foreground: root.fg }
+
+              Text {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                text: "click select \u00b7 x remove \u00b7 a add \u00b7 enter select \u00b7 r refresh"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
           }
         }
       }
     }
-  }
 }

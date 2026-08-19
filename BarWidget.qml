@@ -5,7 +5,7 @@ import "Model.js" as Model
 
 BarWidget {
   id: root
-  moduleName: "christensen.stock-ticker"
+  moduleName: "dchristensen8.stock-ticker"
   clip: true
 
   readonly property string ticker: setting("ticker", "AAPL")

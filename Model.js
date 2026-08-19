@@ -22,19 +22,21 @@ function timeframeParams(tf) {
 
 function chartUrl(ticker, tf) {
   var p = timeframeParams(tf)
+  var sym = String(ticker || "").toUpperCase()
   return ["curl", "-fsS", "--max-time", "8",
           "-H", "User-Agent: Mozilla/5.0",
           "https://query1.finance.yahoo.com/v8/finance/chart/" +
-          encodeURIComponent(ticker.toUpperCase()) +
+          encodeURIComponent(sym) +
           "?interval=" + p.interval + "&range=" + p.range]
 }
 
 function quoteUrl(ticker) {
+  var sym = String(ticker || "").toUpperCase()
   return ["curl", "-fsS", "--max-time", "8",
           "-H", "User-Agent: Mozilla/5.0",
           "https://query1.finance.yahoo.com/v8/finance/chart/" +
-          encodeURIComponent(ticker.toUpperCase()) +
-          "?interval=1d&range=1d"]
+          encodeURIComponent(sym) +
+          "?interval=5m&range=1d&includePrePost=true"]
 }
 
 function parseChart(raw) {
@@ -60,9 +62,24 @@ function parseChart(raw) {
 function parseQuote(raw) {
   try {
     var obj = JSON.parse(raw)
-    var meta = obj.chart && obj.chart.result && obj.chart.result[0] &&
-               obj.chart.result[0].meta
+    var result = obj.chart && obj.chart.result && obj.chart.result[0]
+    var meta = result && result.meta
     if (!meta) return null
+    var pre = null, post = null
+    var ts = result.timestamp
+    var closes = result.indicators && result.indicators.quote &&
+                 result.indicators.quote[0] && result.indicators.quote[0].close
+    var reg = meta.currentTradingPeriod && meta.currentTradingPeriod.regular
+    if (ts && closes && reg) {
+      var preV = null, postV = null
+      for (var i = 0; i < ts.length; i++) {
+        if (closes[i] === null || closes[i] === undefined) continue
+        if (ts[i] < reg.start) preV = closes[i]
+        else if (ts[i] >= reg.end) postV = closes[i]
+      }
+      pre = preV
+      post = postV
+    }
     return {
       price: meta.regularMarketPrice,
       previousClose: meta.chartPreviousClose || meta.previousClose,
@@ -72,7 +89,9 @@ function parseQuote(raw) {
       dayLow: meta.regularMarketDayLow,
       weekHigh52: meta.fiftyTwoWeekHigh,
       weekLow52: meta.fiftyTwoWeekLow,
-      volume: meta.regularMarketVolume
+      volume: meta.regularMarketVolume,
+      preMarketPrice: pre,
+      postMarketPrice: post
     }
   } catch (e) {
     return null
@@ -160,9 +179,10 @@ function timeLabel(t, tf, fmtDt) {
 }
 
 function barLabel(ticker, price) {
+  var sym = String(ticker || "").toUpperCase()
   if (price === null || price === undefined)
-    return ticker.toUpperCase() + ": ..."
-  return ticker.toUpperCase() + ": " + fmtPrice(price)
+    return sym + ": ..."
+  return sym + ": " + fmtPrice(price)
 }
 
 // Node.js exports for testing.

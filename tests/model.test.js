@@ -353,6 +353,33 @@ test("parseQuote extracts day/52-week range and volume", function() {
   assert.equal(q.volume, 34000000)
 })
 
+test("parseQuote extracts post-market price after the regular session", function() {
+  var raw = JSON.stringify({
+    chart: { result: [{ meta: {
+      regularMarketPrice: 100,
+      currentTradingPeriod: { regular: { start: 900, end: 1200 } }
+    }, timestamp: [800, 850, 900, 1100, 1300, 1310],
+      indicators: { quote: [{ close: [99, 99.2, 100, 100.5, 100.8, 101.0] }] } }] }
+  })
+  var q = M.parseQuote(raw)
+  assert.equal(q.price, 100)
+  assert.equal(q.preMarketPrice, 99.2)
+  assert.equal(q.postMarketPrice, 101.0)
+})
+
+test("parseQuote leaves pre/post null without extended-hours data", function() {
+  var raw = JSON.stringify({
+    chart: { result: [{ meta: {
+      regularMarketPrice: 100,
+      currentTradingPeriod: { regular: { start: 900, end: 1200 } }
+    }, timestamp: [900, 1000, 1100],
+      indicators: { quote: [{ close: [100, 100.5, 100.3] }] } }] }
+  })
+  var q = M.parseQuote(raw)
+  assert.equal(q.preMarketPrice, null)
+  assert.equal(q.postMarketPrice, null)
+})
+
 // ── parseChart ──
 
 test("parseChart extracts timestamps and closing prices", function() {

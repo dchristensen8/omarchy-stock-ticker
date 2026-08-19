@@ -5,7 +5,7 @@ Real-time stock price ticker with an interactive line chart for the Omarchy Quat
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/christensen/omarchy-stock-ticker.git --enable
+omarchy plugin add https://github.com/dchristensen8/omarchy-stock-ticker.git --enable
 ```
 
 ## Usage
@@ -42,7 +42,8 @@ ticker's own retry/backoff behavior.
 - Company name, ticker (editable — see below), price with currency
 - Day's change ($ and %), previous close, currency
 - Day range bar with a marker at the current price, plus day low → high
-- 52-week low → high range
+- Click **Day** or **52W** to switch the range bar between the daily range and the 52-week range (resets to **Day** when the panel closes); 52-week low → high shown alongside
+- After-hours / pre-market price in the stats column (e.g. `post 310.22`), colored by the change vs the regular close (today's close after hours, the prior close pre-market); the bar's main price stays on the regular close
 - Volume (abbreviated: `12.4M`, `340K`)
 - "Updated Xs ago" freshness line (amber when stale)
 - Interactive line chart with a hover crosshair showing `price · time`
@@ -65,22 +66,20 @@ ticker's own retry/backoff behavior.
 ### Refresh behavior
 
 - Base interval comes from `refreshSec` (default 5 seconds).
-- While the NYSE is open (9:30–16:00 ET, Mon–Fri) the plugin refreshes at the base interval; when the market is closed it slows to 12× that.
+- While the NYSE is open (9:30–16:00 ET, Mon–Fri) the plugin refreshes at the base interval; when the market is closed it refreshes once per minute so the after-hours/pre-market price keeps tracking.
 - On consecutive fetch failures the interval backs off exponentially (up to 8×), and resets after a successful fetch.
 - An invalid ticker stops automatic retries until you edit the symbol.
 
-## Multiple tickers
-
-The plugin supports multiple instances (`allowMultiple: true`). Add more than one entry to the bar layout, each with its own `ticker`. All instances share one watchlist (see above), so "stocks I'm tracking" lives in one place regardless of how many widgets are on the bar:
+## Multiple tickersThe plugin supports multiple instances (`allowMultiple: true`). Add more than one entry to the bar layout, each with its own `ticker`. All instances share one watchlist (see above), so "stocks I'm tracking" lives in one place regardless of how many widgets are on the bar:
 
 ```json
 {
-  "id": "christensen.stock-ticker",
+  "id": "dchristensen8.stock-ticker",
   "ticker": "MSFT",
   "refreshSec": 10
 },
 {
-  "id": "christensen.stock-ticker",
+  "id": "dchristensen8.stock-ticker",
   "ticker": "AAPL"
 }
 ```
@@ -90,7 +89,7 @@ The plugin supports multiple instances (`allowMultiple: true`). Add more than on
 Change the tracked stock in `~/.config/omarchy/shell.json`:
 
 ```json
-{"id": "christensen.stock-ticker", "ticker": "MSFT", "refreshSec": 10}
+{"id": "dchristensen8.stock-ticker", "ticker": "MSFT", "refreshSec": 10}
 ```
 
 Or click the ticker name in the panel and press `Enter` to edit it interactively.
@@ -110,10 +109,20 @@ Pure helpers in `Model.js` are covered by Node's test runner:
 node --test tests/model.test.js
 ```
 
+## Notes
+
+- Data comes from an **unofficial Yahoo Finance endpoint** that is not a
+  public, documented API and may change or be rate-limited at any time. Keep
+  `refreshSec` at a reasonable value; with multiple instances the default
+  `allowMultiple` means several widgets can be polling at once.
+- Ticker input is validated against an allowlist (`A–Z`, `0–9`, and `.`/`-`/`^`/`=`,
+  up to 10 chars) before any request is made, and the watchlist is capped at 50
+  symbols so a hand-edited file can't balloon the UI or the fetch queue.
+
 ## Remove
 
 ```sh
-omarchy plugin remove christensen.stock-ticker
+omarchy plugin remove dchristensen8.stock-ticker
 ```
 
 ## Dependencies
