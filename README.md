@@ -65,18 +65,23 @@ ticker's own retry/backoff behavior.
 
 ### Refresh behavior
 
-- Base interval comes from `refreshSec` (default 5 seconds).
-- While the NYSE is open (9:30–16:00 ET, Mon–Fri) the plugin refreshes at the base interval; when the market is closed it refreshes once per minute so the after-hours/pre-market price keeps tracking.
-- On consecutive fetch failures the interval backs off exponentially (up to 8×), and resets after a successful fetch.
+- The plugin refreshes automatically **once per minute** while the NYSE is open
+  (9:30–16:00 ET, Mon–Fri) and **once every 3 minutes** while it's closed, so the
+  after-hours/pre-market price keeps tracking without hammering the API.
+- A **manual refresh overrides** the schedule and fetches immediately:
+  middle-click the bar label, or press `r` in the panel.
+- On consecutive fetch failures the interval backs off exponentially (up to 8×),
+  and resets after a successful fetch.
 - An invalid ticker stops automatic retries until you edit the symbol.
 
-## Multiple tickersThe plugin supports multiple instances (`allowMultiple: true`). Add more than one entry to the bar layout, each with its own `ticker`. All instances share one watchlist (see above), so "stocks I'm tracking" lives in one place regardless of how many widgets are on the bar:
+## Multiple tickers
+
+The plugin supports multiple instances (`allowMultiple: true`). Add more than one entry to the bar layout, each with its own `ticker`. All instances share one watchlist (see above), so "stocks I'm tracking" lives in one place regardless of how many widgets are on the bar:
 
 ```json
 {
   "id": "dchristensen8.stock-ticker",
-  "ticker": "MSFT",
-  "refreshSec": 10
+  "ticker": "MSFT"
 },
 {
   "id": "dchristensen8.stock-ticker",
@@ -89,7 +94,7 @@ ticker's own retry/backoff behavior.
 Change the tracked stock in `~/.config/omarchy/shell.json`:
 
 ```json
-{"id": "dchristensen8.stock-ticker", "ticker": "MSFT", "refreshSec": 10}
+{"id": "dchristensen8.stock-ticker", "ticker": "MSFT"}
 ```
 
 Or click the ticker name in the panel and press `Enter` to edit it interactively.
@@ -99,7 +104,6 @@ Or click the ticker name in the panel and press `Enter` to edit it interactively
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `ticker` | string | `AAPL` | Stock symbol, e.g. `AAPL`, `MSFT`, `GOOGL` |
-| `refreshSec` | integer | `5` | Base price refresh interval in seconds (3–60) |
 
 ## Tests
 
@@ -112,9 +116,10 @@ node --test tests/model.test.js
 ## Notes
 
 - Data comes from an **unofficial Yahoo Finance endpoint** that is not a
-  public, documented API and may change or be rate-limited at any time. Keep
-  `refreshSec` at a reasonable value; with multiple instances the default
-  `allowMultiple` means several widgets can be polling at once.
+  public, documented API and may change or be rate-limited at any time. The
+  plugin is intentionally conservative (1 min during market hours, 3 min
+  otherwise); with multiple instances the default `allowMultiple` means
+  several widgets can still be polling at once.
 - Ticker input is validated against an allowlist (`A–Z`, `0–9`, and `.`/`-`/`^`/`=`,
   up to 10 chars) before any request is made, and the watchlist is capped at 50
   symbols so a hand-edited file can't balloon the UI or the fetch queue.

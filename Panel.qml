@@ -18,13 +18,17 @@ Panel {
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : "JetBrainsMono Nerd Font"
 
   readonly property string currentTicker: setting("ticker", "AAPL")
-  readonly property int refreshInterval: Math.max(3, parseInt(setting("refreshSec", "5"), 10) || 5)
+  // Refresh cadence: once a minute while the market is open, once every 3
+  // minutes otherwise. A manual refresh (middle-click on the bar, or `r`)
+  // overrides this and fetches immediately.
+  readonly property int refreshMarketMs: 60000
+  readonly property int refreshClosedMs: 180000
   // ET is UTC-5 fixed (no DST) — an accepted simplification mirrored in
   // Model.js isMarketOpen(); off by an hour around DST transitions.
   readonly property int etOffsetMinutes: -300
 
   // True when no successful quote fetch happened within 3 refresh cycles.
-  readonly property bool stale: lastUpdated > 0 && (root._now - root.lastUpdated) > root.refreshInterval * 1000 * 3
+  readonly property bool stale: lastUpdated > 0 && (root._now - root.lastUpdated) > 300000
 
   readonly property string barChangeLabel: {
     if (!quote || quote.price === null ||
@@ -614,12 +618,12 @@ Panel {
 
   Timer {
     id: refreshTimer
-    // Refresh at the base interval while the market is open; once per minute
-    // otherwise (extended-hours price still tracks). Backs off exponentially
-    // on consecutive failures (capped at 8x).
+    // Refresh once a minute while the market is open, once every 3 minutes
+    // otherwise (the extended-hours price still tracks). Backs off
+    // exponentially on consecutive failures (capped at 8x).
     interval: (Model.isMarketOpen(root._now, root.etOffsetMinutes)
-               ? root.refreshInterval * 1000
-               : 60000) *
+               ? root.refreshMarketMs
+               : root.refreshClosedMs) *
               Math.min(8, Math.pow(2, root.failCount))
     running: true
     repeat: true

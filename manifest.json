@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "dchristensen8.stock-ticker",
   "name": "Stock Ticker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "dchristensen8",
   "license": "MIT",
   "description": "Real-time stock price ticker with interactive chart. Shows ticker and price in the bar; click for detailed view with line chart and timeframe selector.",
@@ -17,8 +17,7 @@
     "allowMultiple": true,
     "defaultSection": "right",
     "defaults": {
-      "ticker": "AAPL",
-      "refreshSec": 5
+      "ticker": "AAPL"
     },
     "schema": [
       {
@@ -26,15 +25,6 @@
         "type": "string",
         "label": "Stock ticker symbol (e.g. AAPL, MSFT, GOOGL)",
         "defaultValue": "AAPL"
-      },
-      {
-        "key": "refreshSec",
-        "type": "integer",
-        "label": "Price refresh interval in seconds",
-        "min": 3,
-        "max": 60,
-        "step": 1,
-        "defaultValue": 5
       }
     ]
   }
