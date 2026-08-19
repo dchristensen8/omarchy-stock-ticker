@@ -14,7 +14,28 @@ omarchy plugin add https://github.com/christensen/omarchy-stock-ticker.git --ena
 
 Shows the ticker (uppercase), the latest price, and the day's percent change, e.g. `MU: 937.85 -7.3%`. The label color follows the day's move: green when up, red when down, dimmed when the data is stale (no successful fetch within three refresh cycles).
 
-Click the label to open the details panel; middle-click refreshes immediately.
+Click the label to open the details panel; **right-click** opens the watchlist; middle-click refreshes immediately.
+
+### Watchlist
+
+Right-click the bar label to open the shared watchlist pane. It shows every
+symbol you're tracking with a live mini-quote (price + day's change, color-coded
+the same as the bar label).
+
+- Click a row to switch the widget to that ticker (closes the watchlist pane)
+- Hover a row to pre-highlight it, then `Enter` to select
+- `↑` / `↓` (or `k` / `j`) to move the selection
+- `x` or the red ✕ to remove a symbol
+- `a` or the "+ add symbol" row to add one; additions are validated against
+  Yahoo before they are saved (typos are rejected with "Ticker not found")
+
+The watchlist is stored in `~/.local/share/stock-ticker/watchlist.json`
+(symbols plus a cache of the last-known mini-quotes, so the pane isn't blank on
+first open). The file is shared by all instances of the widget, and writes are
+merged against the latest on-disk state. Mini-quotes refresh sequentially —
+one request at a time, every 45 seconds — only while the watchlist pane is
+open, so a large list can't hammer the API or interfere with the primary
+ticker's own retry/backoff behavior.
 
 ### Details panel
 
@@ -32,8 +53,11 @@ Click the label to open the details panel; middle-click refreshes immediately.
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Edit ticker symbol |
+| `Enter` | Edit ticker symbol (quote pane) / select highlighted row (watchlist pane) |
 | `←` / `→` (or `h` / `l`) | Step through timeframes |
+| `↑` / `↓` (or `k` / `j`) | Move watchlist selection |
+| `x` | Remove the selected watchlist row |
+| `a` | Add a symbol (watchlist pane) |
 | `r` | Refresh now |
 | `Esc` | Close the panel |
 | `Tab` / `Shift+Tab` | Switch to the neighboring panel |
@@ -47,7 +71,7 @@ Click the label to open the details panel; middle-click refreshes immediately.
 
 ## Multiple tickers
 
-The plugin supports multiple instances (`allowMultiple: true`). Add more than one entry to the bar layout, each with its own `ticker`:
+The plugin supports multiple instances (`allowMultiple: true`). Add more than one entry to the bar layout, each with its own `ticker`. All instances share one watchlist (see above), so "stocks I'm tracking" lives in one place regardless of how many widgets are on the bar:
 
 ```json
 {

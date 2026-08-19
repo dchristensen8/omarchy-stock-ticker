@@ -27,6 +27,10 @@ BarWidget {
     if (panelLoader.item && panelLoader.item.toggle) panelLoader.item.toggle()
   }
 
+  function openWatchlist() {
+    if (panelLoader.item && panelLoader.item.showWatchlist) panelLoader.item.showWatchlist()
+  }
+
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
 
   function open() {
@@ -82,6 +86,7 @@ BarWidget {
 
     onPressed: function(b) {
       if (b === Qt.MiddleButton) root.refresh()
+      else if (b === Qt.RightButton) root.openWatchlist()
       else root.togglePanel()
     }
   }

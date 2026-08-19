@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -44,6 +45,23 @@ Panel {
   property string _quoteStderr: ""
   property string _chartStdout: ""
   property string _chartStderr: ""
+  property string _watchStdout: ""
+  property string _watchStderr: ""
+
+  // ── Watchlist state ──────────────────────────────────────────────────────
+  // Persisted as a shared JSON file (symbols + last-known mini-quote cache) so
+  // multiple instances of the widget see the same list. Reassigned (never
+  // mutated in place) so QML bindings / ListView pick up changes.
+  property string watchlistPath: Quickshell.env("HOME") + "/.local/share/stock-ticker/watchlist.json"
+  property var watchlist: []
+  property var watchlistQuotes: ({})
+  property bool watchlistLoaded: false
+  property bool watchlistMode: false
+  property bool addingTicker: false
+  property string addError: ""
+  property string pendingAdd: ""
+  property int watchCursor: -1
+  property string watchFetching: ""
 
   readonly property string barLabel: {
     if (!quote || quote.price === null || quote.price === undefined)
@@ -76,12 +94,21 @@ Panel {
 
   function close() {
     if (root.editingTicker) cancelEditTicker()
+    if (root.addingTicker) cancelAddTicker()
     root.controller.hide()
   }
 
   function toggle() {
     if (root.opened) close()
-    else open()
+    else {
+      watchlistMode = false
+      open()
+    }
+  }
+
+  function showWatchlist() {
+    watchlistMode = true
+    open()
   }
 
   function switchPanel(direction) {
@@ -145,11 +172,19 @@ Panel {
       cancelEditTicker()
       return
     }
+    applyTicker(newTicker)
+    editingTicker = false
+    Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+  }
+
+  // Shared tail of commitEditTicker() and selectTicker(): persist the ticker
+  // choice through the inline settings entry, drop stale data, refetch.
+  function applyTicker(symbol) {
     var entry = { id: root.moduleName }
     for (var key in root.settings) {
       if (key !== "id") entry[key] = root.settings[key]
     }
-    entry.ticker = newTicker
+    entry.ticker = symbol
     root.settings = entry
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, entry)
@@ -157,8 +192,149 @@ Panel {
     chartData = []
     tickerInvalid = false
     failCount = 0
-    editingTicker = false
     Qt.callLater(refresh)
+  }
+
+  function selectTicker(symbol) {
+    if (!symbol) return
+    applyTicker(symbol)
+    watchlistMode = false
+  }
+
+  // ── Watchlist persistence ────────────────────────────────────────────────
+
+  function cacheFromQuote(q) {
+    return { price: q.price, previousClose: q.previousClose, currency: q.currency }
+  }
+
+  function loadWatchlistFile() {
+    var txt = watchlistFile.text() || ""
+    var parsed = null
+    try { parsed = JSON.parse(txt) } catch (e) { parsed = null }
+    var syms = (parsed && parsed.symbols && Array.isArray(parsed.symbols)) ? parsed.symbols : []
+    var clean = []
+    for (var i = 0; i < syms.length; i++) {
+      var s = String(syms[i]).trim().toUpperCase()
+      if (s && clean.indexOf(s) < 0) clean.push(s)
+    }
+    root.watchlist = clean
+    root.watchlistQuotes = (parsed && parsed.quotes && typeof parsed.quotes === "object")
+      ? parsed.quotes : {}
+    root.watchlistLoaded = true
+    if (root.watchlistMode) startWatchQueue()
+  }
+
+  function saveWatchlist() {
+    if (!root.watchlistLoaded) return
+    watchlistFile.setText(JSON.stringify({
+      symbols: root.watchlist,
+      quotes: root.watchlistQuotes
+    }))
+  }
+
+  // ── Watchlist mini-quote queue ───────────────────────────────────────────
+  // One shared Process walks the list sequentially, refreshing each entry's
+  // cached mini-quote. Runs only while the watchlist pane is visible.
+
+  function startWatchQueue() {
+    if (!root.watchlistLoaded) return
+    if (watchQueueTimer.running) return
+    root.watchCursor = 0
+    fetchNextWatch()
+    watchQueueTimer.start()
+  }
+
+  function stopWatchQueue() {
+    watchQueueTimer.stop()
+  }
+
+  function fetchNextWatch() {
+    if (watchProc.running) return
+    if (root.pendingAdd !== "") {
+      root.watchFetching = root.pendingAdd
+      watchProc.command = Model.quoteUrl(root.pendingAdd)
+      watchProc.running = true
+      return
+    }
+    if (!root.watchlist || root.watchlist.length === 0) return
+    if (root.watchCursor < 0 || root.watchCursor >= root.watchlist.length) return
+    root.watchFetching = root.watchlist[root.watchCursor]
+    watchProc.command = Model.quoteUrl(root.watchFetching)
+    watchProc.running = true
+  }
+
+  function moveWatchCursor(dir) {
+    if (!root.watchlist || root.watchlist.length === 0) return
+    var next = watchlistView.currentIndex + dir
+    if (next < 0) next = 0
+    if (next >= root.watchlist.length) next = root.watchlist.length - 1
+    watchlistView.currentIndex = next
+  }
+
+  // ── Watchlist mutation ───────────────────────────────────────────────────
+
+  function addToList(symbol, q) {
+    var arr = root.watchlist.slice()
+    arr.push(symbol)
+    root.watchlist = arr
+    var qs = {}
+    for (var k in root.watchlistQuotes) qs[k] = root.watchlistQuotes[k]
+    qs[symbol] = cacheFromQuote(q)
+    root.watchlistQuotes = qs
+    root.saveWatchlist()
+  }
+
+  function removeTicker(symbol) {
+    var idx = root.watchlist.indexOf(symbol)
+    if (idx < 0) return
+    var arr = root.watchlist.slice()
+    arr.splice(idx, 1)
+    root.watchlist = arr
+    var qs = {}
+    for (var k in root.watchlistQuotes) {
+      if (k !== symbol) qs[k] = root.watchlistQuotes[k]
+    }
+    root.watchlistQuotes = qs
+    if (watchlistView.currentIndex > arr.length - 1)
+      watchlistView.currentIndex = Math.max(0, arr.length - 1)
+    root.saveWatchlist()
+  }
+
+  function startAddTicker() {
+    root.addError = ""
+    root.addingTicker = true
+    Qt.callLater(function() {
+      addField.text = ""
+      addField.forceActiveFocus()
+    })
+  }
+
+  function cancelAddTicker() {
+    root.addingTicker = false
+    root.addError = ""
+    root.pendingAdd = ""
+    Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+  }
+
+  function commitAddTicker() {
+    var sym = addField.text.trim().toUpperCase()
+    if (!sym) return
+    if (root.watchlist.indexOf(sym) >= 0) {
+      root.addError = "Already on watchlist"
+      Qt.callLater(function() { if (addField) addField.forceActiveFocus() })
+      return
+    }
+    if (root.pendingAdd !== "") return
+    root.addError = ""
+    root.pendingAdd = sym
+    fetchNextWatch()
+  }
+
+  // Called by the queue when the pending-add fetch validated successfully.
+  function commitAdd(symbol, q) {
+    addToList(symbol, q)
+    root.addingTicker = false
+    root.addError = ""
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
@@ -170,6 +346,18 @@ Panel {
       paintTimer.start()
     } else {
       paintTimer.stop()
+      stopWatchQueue()
+    }
+  }
+
+  onWatchlistModeChanged: {
+    if (watchlistMode) {
+      startWatchQueue()
+      Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+    } else {
+      stopWatchQueue()
+      root.addError = ""
+      if (root.addingTicker) cancelAddTicker()
     }
   }
 
@@ -243,6 +431,88 @@ Panel {
     }
   }
 
+  Process {
+    id: watchProc
+    running: false
+    command: []
+
+    onExited: function(exitCode) {
+      var stdout = String(watchOutput.text || root._watchStdout || "")
+      var fetchSym = root.watchFetching
+      root.watchFetching = ""
+      var q = Model.parseQuote(stdout.trim())
+
+      // A pending add is validated before any queue refresh step. The fetch
+      // only counts as validation when it was launched for that symbol.
+      if (root.pendingAdd !== "" && fetchSym === root.pendingAdd) {
+        root.pendingAdd = ""
+        root.addingTicker = false
+        if (q) {
+          root.commitAdd(fetchSym, q)
+        } else {
+          root.addError = "Ticker not found"
+          Qt.callLater(function() { if (addField) addField.forceActiveFocus() })
+        }
+        if (root.watchlistMode) Qt.callLater(root.fetchNextWatch)
+        return
+      }
+
+      if (q && fetchSym && root.watchCursor >= 0 &&
+          root.watchCursor < root.watchlist.length &&
+          fetchSym === root.watchlist[root.watchCursor]) {
+        var qs = {}
+        for (var k in root.watchlistQuotes) qs[k] = root.watchlistQuotes[k]
+        qs[fetchSym] = root.cacheFromQuote(q)
+        root.watchlistQuotes = qs
+        if (root.watchCursor === root.watchlist.length - 1) root.saveWatchlist()
+        root.watchCursor++
+        if (root.watchCursor < root.watchlist.length) fetchNextWatch()
+      }
+    }
+
+    stdout: StdioCollector {
+      id: watchOutput
+      waitForEnd: true
+      onStreamFinished: root._watchStdout = text
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root._watchStderr = text
+    }
+  }
+
+  // Runs one full sequential pass over the watchlist every 45s while the
+  // watchlist pane is open; each pass refreshes every entry's cached quote.
+  Timer {
+    id: watchQueueTimer
+    interval: 45000
+    repeat: true
+    running: false
+    triggeredOnStart: false
+    onTriggered: {
+      if (!root.watchlistMode) { stop(); return }
+      if (watchProc.running) return
+      if (!root.watchlist || root.watchlist.length === 0) return
+      root.watchCursor = 0
+      fetchNextWatch()
+    }
+  }
+
+  // Shared watchlist file. Reads are async; onLoaded syncs our in-memory
+  // copy (and catches writes from other widget instances via watchChanges).
+  FileView {
+    id: watchlistFile
+    path: root.watchlistPath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.loadWatchlistFile()
+    onLoadFailed: function(error) {
+      // Missing file on first run: start with an empty list.
+      root.watchlistLoaded = true
+    }
+  }
+
   Timer {
     id: refreshTimer
     // Refresh faster while the market is open and back off exponentially on
@@ -288,21 +558,37 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(480))
-    contentHeight: panel.fittedContentHeight(contentCol.implicitHeight)
+    contentHeight: panel.fittedContentHeight(Math.max(contentCol.implicitHeight, watchCol.implicitHeight))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.editingTicker
+      blocked: root.editingTicker || root.addingTicker
       onCloseRequested: root.close()
-      onReturnRequested: root.startEditTicker()
+      onReturnRequested: root.watchlistMode
+        ? root.selectTicker(root.watchlist[watchlistView.currentIndex])
+        : root.startEditTicker()
       onTabRequested: function(direction) { root.switchPanel(direction) }
-      onMoveRequested: function(dx, dy) { if (dx !== 0) root.stepTimeframe(dx) }
-      onTextKey: function(t) { if (t === "r" || t === "R") root.refresh() }
+      onMoveRequested: function(dx, dy) {
+        if (root.watchlistMode) {
+          if (dy !== 0) root.moveWatchCursor(dy)
+        } else if (dx !== 0) {
+          root.stepTimeframe(dx)
+        }
+      }
+      onDeleteRequested: function() {
+        if (root.watchlistMode && root.watchlist.length > 0)
+          root.removeTicker(root.watchlist[watchlistView.currentIndex])
+      }
+      onTextKey: function(t) {
+        if (t === "r" || t === "R") root.refresh()
+        else if (root.watchlistMode && (t === "a" || t === "A")) root.startAddTicker()
+      }
 
       Flickable {
         id: mainScroll
         anchors.fill: parent
+        visible: !root.watchlistMode
         contentWidth: width
         contentHeight: contentCol.implicitHeight
         clip: true
@@ -859,6 +1145,242 @@ Panel {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
             text: "enter edit ticker \u00b7 r refresh \u00b7 esc closes"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
+
+      // ── Watchlist pane ──
+      Flickable {
+        id: watchScroll
+        anchors.fill: parent
+        visible: root.watchlistMode
+        contentWidth: width
+        contentHeight: watchCol.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        interactive: contentHeight > height
+
+        Column {
+          id: watchCol
+          width: watchScroll.width
+          spacing: Style.space(10)
+
+          // Header
+          Row {
+            width: parent.width
+            spacing: Style.space(8)
+
+            Text {
+              text: "Watchlist"
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.display
+              font.bold: true
+            }
+
+            Text {
+              text: root.watchlist.length + " symbols"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
+
+          // Symbols with cached mini-quotes
+          ListView {
+            id: watchlistView
+            width: parent.width
+            height: Math.min(root.watchlist.length, 6) * Style.space(34)
+            clip: true
+            currentIndex: 0
+            interactive: true
+            boundsBehavior: Flickable.StopAtBounds
+            model: root.watchlist
+
+            delegate: Item {
+              required property string modelData
+              required property int index
+              width: watchlistView.width
+              height: Style.space(34)
+
+              Rectangle {
+                anchors.fill: parent
+                radius: Style.cornerRadius
+                color: index === watchlistView.currentIndex
+                  ? Style.hoverFillFor(root.fg, Color.accent)
+                  : "transparent"
+              }
+
+              Text {
+                id: symText
+                text: modelData
+                color: root.fg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                text: {
+                  var c = root.watchlistQuotes[modelData]
+                  if (!c) return ""
+                  var ch = c.price - c.previousClose
+                  var pct = c.previousClose ? (ch / c.previousClose) * 100 : 0
+                  return Model.fmtPrice(c.price) + " (" + Model.fmtPct(pct) + ")"
+                }
+                color: {
+                  var c = root.watchlistQuotes[modelData]
+                  return c ? Model.changeColor(c.price - c.previousClose, root.dim) : root.dim
+                }
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                anchors.left: symText.right
+                anchors.leftMargin: Style.space(10)
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              // Full-row hover highlight + click to select (sits below the ×)
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onEntered: watchlistView.currentIndex = index
+                onClicked: root.selectTicker(modelData)
+              }
+
+              Text {
+                text: "\uf00d"
+                color: "#ef4444"
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.removeTicker(modelData)
+                }
+              }
+            }
+          }
+
+          // Add-symbol affordance (idle state)
+          Row {
+            visible: !root.addingTicker
+            spacing: Style.space(6)
+
+            Text {
+              text: "\uf067"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              anchors.verticalCenter: parent.verticalCenter
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.startAddTicker()
+              }
+            }
+
+            Text {
+              text: "add symbol"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              anchors.verticalCenter: parent.verticalCenter
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.startAddTicker()
+              }
+            }
+          }
+
+          // Add-symbol inline input
+          Row {
+            visible: root.addingTicker
+            spacing: Style.space(4)
+
+            TextField {
+              id: addField
+              width: Style.space(120)
+              foreground: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              placeholderText: "SYMBOL"
+
+              Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Escape) {
+                  root.cancelAddTicker()
+                  event.accepted = true
+                } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                  root.commitAddTicker()
+                  event.accepted = true
+                }
+              }
+            }
+
+            Text {
+              text: "\uf00c"
+              color: "#22c55e"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              anchors.verticalCenter: parent.verticalCenter
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.commitAddTicker()
+              }
+            }
+
+            Text {
+              text: "\uf00d"
+              color: "#ef4444"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              anchors.verticalCenter: parent.verticalCenter
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.cancelAddTicker()
+              }
+            }
+          }
+
+          Text {
+            visible: root.addError !== ""
+            text: root.addError
+            color: "#ef4444"
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.italic: true
+          }
+
+          // Footer
+          PanelSeparator { width: parent.width; foreground: root.fg }
+
+          Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            text: "click select \u00b7 x remove \u00b7 a add \u00b7 enter select \u00b7 r refresh"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
