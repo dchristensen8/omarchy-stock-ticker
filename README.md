@@ -2,6 +2,12 @@
 
 Real-time stock price ticker with an interactive line chart for the Omarchy Quattro bar.
 
+## Screenshots
+
+| Details panel | Watchlist |
+| --- | --- |
+| ![Details panel](screenshots/panel.png) | ![Watchlist](screenshots/watchlist.png) |
+
 ## Install
 
 ```sh
@@ -115,8 +121,8 @@ node --test tests/model.test.js
 
 ## Notes
 
-- Data comes from an **unofficial Yahoo Finance endpoint** that is not a
-  public, documented API and may change or be rate-limited at any time. The
+- This plugin uses an **unofficial/undocumented Yahoo endpoint** — not a
+  supported API — and may break at any time. It may also be rate-limited. The
   plugin is intentionally conservative (1 min during market hours, 3 min
   otherwise); with multiple instances the default `allowMultiple` means
   several widgets can still be polling at once.

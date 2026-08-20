@@ -1354,9 +1354,9 @@ Panel {
               id: watchlistView
               width: parent.width
               height: root.watchlist.length * Style.space(44)
-            interactive: false
-            currentIndex: 0
-            model: root.watchlist
+              interactive: false
+              currentIndex: 0
+              model: root.watchlist
 
             delegate: Item {
               required property string modelData
@@ -1473,7 +1473,7 @@ Panel {
                   onClicked: root.removeTicker(modelData)
                 }
               }
-            }
+              }
             }
           }
 
@@ -1487,102 +1487,102 @@ Panel {
               visible: !root.addingTicker
               spacing: Style.space(6)
 
-            Text {
-              text: "\uf067"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall * 1.4
-              anchors.verticalCenter: parent.verticalCenter
+              Text {
+                text: "\uf067"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall * 1.4
+                anchors.verticalCenter: parent.verticalCenter
 
-              MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.startAddTicker()
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.startAddTicker()
+                }
+              }
+
+              Text {
+                text: "add symbol"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall * 1.4
+                anchors.verticalCenter: parent.verticalCenter
+
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.startAddTicker()
+                }
               }
             }
 
-            Text {
-              text: "add symbol"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall * 1.4
-              anchors.verticalCenter: parent.verticalCenter
+            // Add-symbol inline input
+            Row {
+              visible: root.addingTicker
+              spacing: Style.space(4)
 
-              MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.startAddTicker()
+              TextField {
+                id: addField
+                width: Style.space(120)
+                maximumLength: 10
+                foreground: root.fg
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body * 1.4
+                placeholderText: "SYMBOL"
+
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Escape) {
+                    root.cancelAddTicker()
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    root.commitAddTicker()
+                    event.accepted = true
+                  }
+                }
               }
-            }
-          }
 
-          // Add-symbol inline input
-          Row {
-            visible: root.addingTicker
-            spacing: Style.space(4)
+              Text {
+                text: "\uf00c"
+                color: "#22c55e"
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall * 1.4
+                anchors.verticalCenter: parent.verticalCenter
 
-            TextField {
-              id: addField
-              width: Style.space(120)
-              maximumLength: 10
-              foreground: root.fg
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body * 1.4
-              placeholderText: "SYMBOL"
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.commitAddTicker()
+                }
+              }
 
-              Keys.onPressed: function(event) {
-                if (event.key === Qt.Key_Escape) {
-                  root.cancelAddTicker()
-                  event.accepted = true
-                } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                  root.commitAddTicker()
-                  event.accepted = true
+              Text {
+                text: "\uf00d"
+                color: "#ef4444"
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall * 1.4
+                anchors.verticalCenter: parent.verticalCenter
+
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.cancelAddTicker()
                 }
               }
             }
 
             Text {
-              text: "\uf00c"
-              color: "#22c55e"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall * 1.4
-              anchors.verticalCenter: parent.verticalCenter
-
-              MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.commitAddTicker()
-              }
-            }
-
-            Text {
-              text: "\uf00d"
+              visible: root.addError !== ""
+              text: root.addError
               color: "#ef4444"
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall * 1.4
-              anchors.verticalCenter: parent.verticalCenter
-
-              MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.cancelAddTicker()
-              }
+              font.italic: true
             }
           }
-
-          Text {
-                visible: root.addError !== ""
-                text: root.addError
-                color: "#ef4444"
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall * 1.4
-                font.italic: true
-              }
-            }
 
             Column {
               id: watchFooter
@@ -1600,7 +1600,7 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
-          }
+            }
         }
       }
     }
