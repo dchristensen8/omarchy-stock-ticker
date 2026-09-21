@@ -1090,7 +1090,17 @@ Panel {
                   py.push(padT + (1 - (dataPoints[j].p - minP) / range) * ch)
                 }
 
-                var up = dataPoints[dataPoints.length - 1].p >= dataPoints[0].p
+                // "Up" baseline: on the current-day chart the day's previous
+                // close (so a higher pre-market opening bar can't paint a green
+                // day red); on longer timeframes, the first plotted point.
+                var firstP = dataPoints[0].p
+                if (tf === "1D" && root.quote &&
+                    root.quote.previousClose !== null &&
+                    root.quote.previousClose !== undefined) {
+                  firstP = root.quote.previousClose
+                }
+                var lastP = dataPoints[dataPoints.length - 1].p
+                var up = lastP >= firstP
                 var lineColor = up ? "#22c55e" : "#ef4444"
 
                 // Area fill
@@ -1129,9 +1139,7 @@ Panel {
                 ctx.fillText(Model.fmtPrice(minP), padL - 6, padT + ch)
                 ctx.fillStyle = root.dim
 
-                // Period % change (upper right)
-                var firstP = dataPoints[0].p
-                var lastP = dataPoints[dataPoints.length - 1].p
+                // Period % change (upper right) — same baseline as the line color
                 var pctChg = firstP ? ((lastP - firstP) / firstP) * 100 : 0
                 ctx.font = "bold 12px " + root.fontFamily
                 ctx.fillStyle = up ? "#22c55e" : "#ef4444"
