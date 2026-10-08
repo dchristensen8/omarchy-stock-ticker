@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "dchristensen8.stock-ticker",
   "name": "Stock Ticker",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": "dchristensen8",
   "license": "MIT",
   "description": "Real-time stock price ticker with interactive chart. Shows ticker and price in the bar; click for detailed view with line chart and timeframe selector.",

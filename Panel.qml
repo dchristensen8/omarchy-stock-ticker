@@ -999,40 +999,76 @@ Panel {
               }
             }
 
-            Column {
+            Item {
               id: changeCol
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(4)
               visible: root.quote !== null && root.quote.previousClose !== null
+              width: Math.max(changeRow.implicitWidth,
+                              Math.max(prevCloseRow.implicitWidth, postLine.implicitWidth))
+              height: changeRow.height + prevCloseRow.height + postLine.height +
+                      2 * Style.space(4)
 
-              Text {
-                visible: root.quote !== null
-                text: {
-                  if (!root.quote) return ""
-                  var ch = root.quote.price - root.quote.previousClose
-                  return Model.fmtChange(ch) + " (" + Model.fmtPct(
-                    root.quote.previousClose ? (ch / root.quote.previousClose) * 100 : 0
-                  ) + ")"
+              Row {
+                id: changeRow
+                anchors.right: parent.right
+                anchors.top: parent.top
+                spacing: Style.space(8)
+
+                Text {
+                  text: {
+                    if (!root.quote) return ""
+                    var ch = root.quote.price - root.quote.previousClose
+                    return Model.fmtChange(ch)
+                  }
+                  color: root.quote
+                    ? Model.changeColor(root.quote.price - root.quote.previousClose, root.dim)
+                    : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.title
+                  font.bold: true
                 }
-                color: root.quote
-                  ? Model.changeColor(root.quote.price - root.quote.previousClose, root.dim)
-                  : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.title
-                font.bold: true
-                horizontalAlignment: Text.AlignRight
+                Text {
+                  text: {
+                    if (!root.quote) return ""
+                    var ch = root.quote.price - root.quote.previousClose
+                    return "(" + Model.fmtPct(
+                      root.quote.previousClose ? (ch / root.quote.previousClose) * 100 : 0
+                    ) + ")"
+                  }
+                  color: root.quote
+                    ? Model.changeColor(root.quote.price - root.quote.previousClose, root.dim)
+                    : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.title
+                }
+              }
+
+              Row {
+                id: prevCloseRow
+                anchors.right: parent.right
+                anchors.top: changeRow.bottom
+                anchors.topMargin: Style.space(4)
+                spacing: Style.space(8)
+
+                Text {
+                  text: root.quote ? Model.fmtPrice(root.quote.previousClose) : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  text: "prev close"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
               }
 
               Text {
-                visible: root.quote !== null
-                text: root.quote ? Model.fmtPrice(root.quote.previousClose) + " prev close" : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                horizontalAlignment: Text.AlignRight
-              }
-
-              Text {
+                id: postLine
+                anchors.right: parent.right
+                anchors.top: prevCloseRow.bottom
+                anchors.topMargin: Style.space(4)
                 visible: root.extended !== null
                 text: {
                   var e = root.extended
@@ -1046,7 +1082,6 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
-                horizontalAlignment: Text.AlignRight
               }
             }
           }
