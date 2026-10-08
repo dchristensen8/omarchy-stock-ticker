@@ -380,6 +380,45 @@ test("parseQuote leaves pre/post null without extended-hours data", function() {
   assert.equal(q.postMarketPrice, null)
 })
 
+test("parseQuote captures pre/post times and trading period", function() {
+  var raw = JSON.stringify({
+    chart: { result: [{ meta: {
+      regularMarketPrice: 100,
+      currentTradingPeriod: {
+        pre: { start: 800, end: 900 },
+        regular: { start: 900, end: 1200 }
+      }
+    }, timestamp: [820, 850, 900, 1100, 1210, 1230],
+      indicators: { quote: [{ close: [99, 99.2, 100, 100.5, 100.8, 101.0] }] } }] }
+  })
+  var q = M.parseQuote(raw)
+  assert.equal(q.preMarketPrice, 99.2)
+  assert.equal(q.preMarketTime, 850)
+  assert.equal(q.postMarketPrice, 101.0)
+  assert.equal(q.postMarketTime, 1230)
+  assert.equal(q.preStart, 800)
+  assert.equal(q.regularStart, 900)
+  assert.equal(q.regularEnd, 1200)
+  assert.equal(q.overnightPrice, null)
+})
+
+test("parseQuote captures an overnight print before the pre-market window", function() {
+  var raw = JSON.stringify({
+    chart: { result: [{ meta: {
+      regularMarketPrice: 100,
+      currentTradingPeriod: {
+        pre: { start: 800, end: 900 },
+        regular: { start: 900, end: 1200 }
+      }
+    }, timestamp: [700, 760, 820, 850],
+      indicators: { quote: [{ close: [98, 98.4, 99, 99.2] }] } }] }
+  })
+  var q = M.parseQuote(raw)
+  assert.equal(q.overnightPrice, 98.4)
+  assert.equal(q.overnightTime, 760)
+  assert.equal(q.preMarketPrice, 99.2)
+})
+
 // ── parseChart ──
 
 test("parseChart extracts timestamps and closing prices", function() {

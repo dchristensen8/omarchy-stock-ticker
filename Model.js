@@ -36,7 +36,7 @@ function quoteUrl(ticker) {
           "-H", "User-Agent: Mozilla/5.0",
           "https://query1.finance.yahoo.com/v8/finance/chart/" +
           encodeURIComponent(sym) +
-          "?interval=5m&range=1d&includePrePost=true"]
+          "?interval=5m&range=2d&includePrePost=true"]
 }
 
 function parseChart(raw) {
@@ -65,20 +65,35 @@ function parseQuote(raw) {
     var result = obj.chart && obj.chart.result && obj.chart.result[0]
     var meta = result && result.meta
     if (!meta) return null
-    var pre = null, post = null
+    var pre = null, post = null, preTime = null, postTime = null
+    var over = null, overTime = null
     var ts = result.timestamp
     var closes = result.indicators && result.indicators.quote &&
                  result.indicators.quote[0] && result.indicators.quote[0].close
-    var reg = meta.currentTradingPeriod && meta.currentTradingPeriod.regular
-    if (ts && closes && reg) {
-      var preV = null, postV = null
+    var per = meta.currentTradingPeriod
+    var preStart = per && per.pre && per.pre.start
+    var regStart = per && per.regular && per.regular.start
+    var regEnd = per && per.regular && per.regular.end
+    if (ts && closes && regStart !== null && regStart !== undefined &&
+        regEnd !== null && regEnd !== undefined) {
       for (var i = 0; i < ts.length; i++) {
         if (closes[i] === null || closes[i] === undefined) continue
-        if (ts[i] < reg.start) preV = closes[i]
-        else if (ts[i] >= reg.end) postV = closes[i]
+        var t = ts[i]
+        if (t >= regEnd) {
+          post = closes[i]
+          postTime = t
+        } else if (t < regStart) {
+          if (preStart !== null && preStart !== undefined && t < preStart) {
+            // Bars from before the current pre-market window (prior trading
+            // days) — the trailing print serves as the overnight quote.
+            over = closes[i]
+            overTime = t
+          } else {
+            pre = closes[i]
+            preTime = t
+          }
+        }
       }
-      pre = preV
-      post = postV
     }
     return {
       price: meta.regularMarketPrice,
@@ -91,7 +106,14 @@ function parseQuote(raw) {
       weekLow52: meta.fiftyTwoWeekLow,
       volume: meta.regularMarketVolume,
       preMarketPrice: pre,
-      postMarketPrice: post
+      preMarketTime: preTime,
+      postMarketPrice: post,
+      postMarketTime: postTime,
+      overnightPrice: over,
+      overnightTime: overTime,
+      preStart: preStart,
+      regularStart: regStart,
+      regularEnd: regEnd
     }
   } catch (e) {
     return null

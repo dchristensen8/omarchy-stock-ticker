@@ -38,34 +38,78 @@ Panel {
   }
 
   // Low/high of whichever range the bar marker is showing (Day or 52W).
+  // The min/max of the currently plotted data (the chart's timeframe).
+  function chartRange() {
+    var pts = root.chartData
+    if (!pts || pts.length === 0) return null
+    var lo = pts[0].p
+    var hi = pts[0].p
+    for (var i = 1; i < pts.length; i++) {
+      if (pts[i].p < lo) lo = pts[i].p
+      if (pts[i].p > hi) hi = pts[i].p
+    }
+    if (hi <= lo) return null
+    return { low: lo, high: hi }
+  }
+
+  // Low/high for the range-bar marker, following the chart's selected
+  // timeframe: the true intraday range on the current day, otherwise the
+  // min/max of the plotted data for the timeframe.
   function rangeLow() {
-    if (!root.quote) return null
-    return root.rangeMode === "52W" ? root.quote.weekLow52 : root.quote.dayLow
+    if (root.timeFrame === "1D" && root.quote &&
+        root.quote.dayLow !== null && root.quote.dayLow !== undefined)
+      return root.quote.dayLow
+    var r = root.chartRange()
+    return r ? r.low : null
   }
 
   function rangeHigh() {
-    if (!root.quote) return null
-    return root.rangeMode === "52W" ? root.quote.weekHigh52 : root.quote.dayHigh
+    if (root.timeFrame === "1D" && root.quote &&
+        root.quote.dayHigh !== null && root.quote.dayHigh !== undefined)
+      return root.quote.dayHigh
+    var r = root.chartRange()
+    return r ? r.high : null
   }
 
-  // Extended-hours price (post-market takes priority over pre-market/overnight).
-  readonly property var extendedPrice: {
-    if (!quote) return null
-    if (quote.postMarketPrice !== null && quote.postMarketPrice !== undefined)
-      return quote.postMarketPrice
-    if (quote.preMarketPrice !== null && quote.preMarketPrice !== undefined)
-      return quote.preMarketPrice
+  // The active extended-hours print for right now: after the close and through
+  // the evening/overnight it's the last after-hours price ("post"), during the
+  // pre-market window it's the pre-market price ("pre"), and before the
+  // pre-market session (early overnight) it falls back to the prior session's
+  // final print. Includes the time of that newest print.
+  readonly property var extended: {
+    if (!quote || quote.price === null) return null
+    var now = root._now / 1000
+    var regStart = quote.regularStart
+    var regEnd = quote.regularEnd
+    var preStart = quote.preStart
+    var hasPre = quote.preMarketPrice !== null && quote.preMarketPrice !== undefined
+    var hasPost = quote.postMarketPrice !== null && quote.postMarketPrice !== undefined
+    var hasOver = quote.overnightPrice !== null && quote.overnightPrice !== undefined
+    if (regEnd !== null && regEnd !== undefined && now >= regEnd) {
+      if (hasPost) return { label: "post", price: quote.postMarketPrice, time: quote.postMarketTime }
+      if (hasOver) return { label: "post", price: quote.overnightPrice, time: quote.overnightTime }
+      return null
+    }
+    if (preStart !== null && preStart !== undefined && now >= preStart &&
+        (regStart === null || regStart === undefined || now < regStart)) {
+      if (hasPre) return { label: "pre", price: quote.preMarketPrice, time: quote.preMarketTime }
+      return null
+    }
+    if (preStart !== null && preStart !== undefined && now < preStart) {
+      if (hasOver) return { label: "post", price: quote.overnightPrice, time: quote.overnightTime }
+      if (hasPost) return { label: "post", price: quote.postMarketPrice, time: quote.postMarketTime }
+      return null
+    }
     return null
   }
 
   // vs the regular close (today's close after hours; the prior close pre-market).
   readonly property real extendedChange: {
-    if (!quote || quote.price === null || extendedPrice === null) return 0
-    return extendedPrice - quote.price
+    if (!quote || quote.price === null || extended === null) return 0
+    return extended.price - quote.price
   }
 
   property string timeFrame: "1D"
-  property string rangeMode: "Day"
   property var quote: null
   property var chartData: []
   property bool editingTicker: false
@@ -431,7 +475,6 @@ Panel {
     } else {
       paintTimer.stop()
       stopWatchQueue()
-      root.rangeMode = "Day"
     }
   }
 
@@ -708,10 +751,10 @@ Panel {
           // ── Header ──
           Row {
             width: parent.width
-            spacing: Style.space(10)
+            spacing: Style.space(18)
 
             Column {
-              width: parent.width - changeCol.width - Style.space(10)
+              width: parent.width - changeCol.width - Style.space(18)
               spacing: Style.space(2)
 
               // Company name
@@ -829,7 +872,7 @@ Panel {
                 font.bold: true
               }
 
-              // Range bar with marker at current price (Day or 52W per rangeMode)
+              // Range bar with marker at current price (range follows the chart timeframe)
               Rectangle {
                 visible: root.quote !== null && root.rangeLow() !== null &&
                          root.rangeHigh() !== null && root.rangeHigh() > root.rangeLow()
@@ -862,21 +905,14 @@ Panel {
               Row {
                 visible: root.quote !== null && root.quote.dayLow !== null &&
                          root.quote.dayHigh !== null
-                spacing: Style.space(6)
+                spacing: Style.space(10)
 
                 Text {
                   text: "Day"
-                  color: root.rangeMode === "Day" ? root.fg : root.dim
+                  color: root.fg
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  font.bold: root.rangeMode === "Day"
-
-                  MouseArea {
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: root.rangeMode = "Day"
-                  }
+                  font.bold: true
                 }
                 Text {
                   text: root.quote ? Model.fmtPriceWithCurrency(root.quote.dayLow, root.quote.currency) : ""
@@ -902,21 +938,14 @@ Panel {
               Row {
                 visible: root.quote !== null && root.quote.weekLow52 !== null &&
                          root.quote.weekHigh52 !== null
-                spacing: Style.space(6)
+                spacing: Style.space(10)
 
                 Text {
                   text: "52W"
-                  color: root.rangeMode === "52W" ? root.fg : root.dim
+                  color: root.fg
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  font.bold: root.rangeMode === "52W"
-
-                  MouseArea {
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: root.rangeMode = "52W"
-                  }
+                  font.bold: true
                 }
                 Text {
                   text: root.quote ? Model.fmtPriceWithCurrency(root.quote.weekLow52, root.quote.currency) : ""
@@ -941,7 +970,7 @@ Panel {
               // Volume
               Row {
                 visible: root.quote !== null && root.quote.volume !== null
-                spacing: Style.space(6)
+                spacing: Style.space(10)
 
                 Text {
                   text: "Vol"
@@ -1004,12 +1033,12 @@ Panel {
               }
 
               Text {
-                visible: root.quote !== null && root.extendedPrice !== null
+                visible: root.extended !== null
                 text: {
-                  if (!root.quote || root.extendedPrice === null) return ""
-                  var isPost = root.quote.postMarketPrice !== null &&
-                               root.quote.postMarketPrice !== undefined
-                  return (isPost ? "post" : "pre") + " " + Model.fmtPrice(root.extendedPrice)
+                  var e = root.extended
+                  if (!e) return ""
+                  return e.label + " " + Model.fmtPrice(e.price) +
+                         (e.time ? " \u00b7 " + Model.timeLabel(e.time, "1D", Qt.formatDateTime) : "")
                 }
                 color: root.quote
                   ? Model.changeColor(root.extendedChange, root.dim)

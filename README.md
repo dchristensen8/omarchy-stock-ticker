@@ -47,9 +47,8 @@ ticker's own retry/backoff behavior.
 
 - Company name, ticker (editable — see below), price with currency
 - Day's change ($ and %), previous close, currency
-- Day range bar with a marker at the current price, plus day low → high
-- Click **Day** or **52W** to switch the range bar between the daily range and the 52-week range (resets to **Day** when the panel closes); 52-week low → high shown alongside
-- After-hours / pre-market price in the stats column (e.g. `post 310.22`), colored by the change vs the regular close (today's close after hours, the prior close pre-market); the bar's main price stays on the regular close
+- Range bar marker showing where the price sits within the **chart's selected timeframe** (true intraday range on 1D, the plotted high–low otherwise), plus the day low → high and 52-week low → high reference rows
+- After-hours / pre-market price in the stats column with the time of the last print (e.g. `post 310.22 · 19:58`), colored by the change vs the regular close; stays available after the close and through the overnight gap via the prior session's final print; the bar's main price stays on the regular close
 - Volume (abbreviated: `12.4M`, `340K`)
 - "Updated Xs ago" freshness line (amber when stale)
 - Interactive line chart with a hover crosshair showing `price · time`
